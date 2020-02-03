@@ -1,0 +1,493 @@
+---
+title: "CMSE_Email_Analysis"
+author: "HP"
+date: "August 19, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+#CMSE email analysis program
+#[Redacted]
+
+#THE PURPOSES OF THIS PROGRAM ARE TO:
+#load all files, eliminate duplicates in the columns, rename files by their dates
+#outputs chart showing dept. size by date
+#chart showing column sizes by date
+#chart showing movement between columns by time
+#chart showing email servers by time
+#scissor chart showing number of dual/single degree phd students over time
+
+#FILE FORMAT SHOULD BE RELATIVELY CONSISTENT
+#aka: file name should start with date in format 20190819
+#csv files should be in the same folder as program
+#csv files should have consistently named columns
+#if the program cannot find the files, close R, go to the folder with the files and the program saved in it, and
+##open the program from that location. Then R will know where it is.
+
+#load libraries
+library(tidyverse)
+library(stringr) #for substringing
+library(expss)#for the countif function
+library(tidyr)#this might already be in tidyverse, not really sure
+library(ggplot2)#graphs
+library(dplyr)#transmutate function
+library(circlize)#makes happy chord diagrams
+library(bubbles)#bubble charts, my favorite package
+
+#Finds all the csv files in the same folder as this program
+#(and also, oddly, csv files in a folder above this one if there is a folder above this one)
+filenames <- (Sys.glob("*.csv"))
+
+#number of email lists found in the folder
+filenum <- length(filenames)
+
+#cut off the date from the filenames, concatenate it in a recognizeable format, and cast it as a date
+filedates <- paste(substr(filenames, 5,6), "/", substr(filenames, 7,8),  "/", substr(filenames, 1,4), sep = "") %>% 
+  as.Date(format = "%m/%d/%Y") 
+
+#read in all of the files into a list of dataframes
+filelist <- sapply(filenames, function(x) read.csv(x))
+
+#go over every column and arrange by reverse alphabetical order (for aestetic reasons)
+#filelist <- sapply(filelist, function(x) sapply(x, FUN = sort, decreasing = TRUE, na.last = TRUE))
+
+#go over every column in the dataframe, and remove duplicates
+#getting some odd behavior here
+filelist <- sapply(filelist, function(x) sapply(x, MARGIN = 2, FUN = unique, incomparables = c("", "NA", NA)))
+
+#create an empty container to hold info from the dept size from every file
+department_size_frame <- data.frame("Filedates" = filedates, "Staff" = NA, "Faculty" = NA, "Single_PhD"=NA,
+                                     "Science"=NA, "Graduate_Science"=NA, "Undergraduate"=NA, 
+                                    "Announcements"=NA, "Alumni"=NA, "Dual_PhD" = NA, "Pending_Alumni"=NA, "Total" = NA)
+
+#a function that counts the number of emails in a specified column of a specified file
+count_column <- function(current_file, column_to_count){
+  
+  #some files don't contain all of the column names, 
+  ##in which case the email count shoud be stored as NA for that col
+  #additionally, people on the staff shouldn't be counted in the phds, cause presumeably they are just on the list for admin purposes
+  ifelse(length(filelist[current_file][[1]][[column_to_count]])==0, NA,
+         count_if(function(x) return(!(x %in% filelist[current_file][[1]]$'cmse_staff') & x!=""),
+                  filelist[current_file][[1]][[column_to_count]])) #possibly should omit fac? YES
+}
+
+#for every file of emails
+for (file in 1:filenum){
+  
+  #count the number of emails in every column and record it
+  #if the column doesn't exist in the file, record the size as "NA"
+  department_size_frame$Staff[file] <-  ifelse(length(filelist[file][[1]]$'cmse_staff')==0, NA,
+                                                count_if(function(x) return(x!=""),filelist[file][[1]]$'cmse_staff'))
+  
+  department_size_frame$Faculty[file] <- ifelse(length(filelist[file][[1]]$'cmse_fac')==0, NA,
+                                                count_if(function(x) return(x!=""),filelist[file][[1]]$'cmse_fac'))
+  
+  #single phds shouldn't include dual phds
+  department_size_frame$Single_PhD[file] <- ifelse(length(filelist[file][[1]]$'cmse_phd')==0, NA,
+                                                    count_if(function(x) return(!(x %in% filelist[file][[1]]$'cmse_staff') 
+                                                                                 & x!="" & !(x %in% filelist[file][[1]]$'cmse_dual_phd')),
+                                                              filelist[file][[1]]$'cmse_phd'))
+  
+  #the rest of these use a function that does the same thing as above, and additionally removes people on the staff
+  ##from the count
+  department_size_frame$Dual_PhD[file] <- count_column(file, 'cmse_dual_phd')
+  department_size_frame$Science[file] <- count_column(file, 'cmse_sci')    #could use a more descriptive name?
+  department_size_frame$Graduate_Science[file] <- count_column(file, 'cmse_grad_sci')  #better name?
+  department_size_frame$Undergraduate[file] <- count_column(file, 'cmse_ug_sci')
+  department_size_frame$Announcements[file] <- count_column(file, '[Redacted]')
+  department_size_frame$Pending_Alumni <- count_column(file, 'cmse_alumni (pending)')
+  department_size_frame$Alumni[file] <- count_column(file, 'cmse_alumni')
+  
+  #and then the total dept. size
+  #not all the colums always existed, which is misleading
+  ##could be changed easily?
+  department_size_frame$Total[file] <- rowSums(department_size_frame[file, 2:12], na.rm=TRUE)
+}
+```
+
+## Introduction
+This document was generated with an R Markdown document. It can be re-ran in the folder containing the CMSE email files, and the graphs will be regenerated to include the new data. Running the program generates a lot of warnings, but its okay; since some of the CMSE categories (like announcments) were not recorded until later, there are a lot of 'NA's in the data. The 'NA's cause the warnings. Possible changes to the program can be found by searching for '?' with control-find and reading the matching comments.
+
+###THE PURPOSES OF THIS PROGRAM ARE TO:
+1. Load all email CSV files.
+2. Eliminate duplicates in the columns.
+3. Outputs: 
+ - Chart showing dept. size by date and by category
+ - Density chart of department category sizes
+ - Scissor chart showing number of dual/single degree phd students over time
+ - Chord diagram showing movement between cmse categories for every year
+ - Horizontal bar chart showing the popularity of email domain names in the Announcement category by year
+ - Chart showing the ranking of the popularity of email domain names in the Announcement category by year.
+ - Corresponding dataframes printed for most charts.
+ 
+###FILE FORMAT SHOULD BE RELATIVELY CONSISTENT
+1. File name should start with date in format '20190819'. The remainder of the name can be anything.
+2. CSV files should be in the same folder as program
+3. CSV files should have consistently named columns
+4. If the program cannot find the files, close R, go to the folder with the files and the program saved in it, and open the program from that location. Then R will know where it is.
+
+##CMSE Department Size and Category Size Over Time
+The next graph shows the size of the CMSE department for all dates included in the email files.
+
+NOTES:
+
+ - The people in the staff column of the email lists are removed from the other categories. Presumeably they are just on the lists so they know what's going on, not because they are part of the department. (The people in the faculty column have not been removed, however.)
+ - Some columns didn't appear on the email lists until later, so the lines representing the columns start suddenly. Therefore, the 'Total' column is slightly misleading.
+ - Some of the dual PhDs also appeared in the single PhD column. For this purpose, they were removed from the single PhD column and only counted in the dual PhD column.
+ 
+```{r size_graph, echo=FALSE}
+
+##################################### now lets make a graph of department sizes ##################################
+#First, put the dept_size_frame into "long" format
+department_size_frame_long <- gather(department_size_frame, Category, Department_Size, Staff:Total, 
+                                     factor_key=TRUE)
+
+# Basic line graph with points (total only)
+ggplot(data=department_size_frame_long %>% filter(Category == 'Total'), aes(x=Filedates, y=Department_Size, group=Category,
+                                                                            color = Category)) +
+  geom_point(size=3)+
+  geom_line()+
+  ggtitle("CMSE Growth")+
+  xlab("Time")+
+  ylab("People")+ labs(caption = "*Not all categories existed for duration of the graph, which affects the Total.")+
+  theme_minimal()
+
+
+# Basic line graph with points (no total)
+ggplot(data=department_size_frame_long %>% filter(Category != 'Total'), aes(x=Filedates, y=Department_Size, group=Category,
+                                             color = Category)) +
+  geom_point(size=3)+
+  geom_line()+
+  ggtitle("CMSE Category Growth")+
+  xlab("Time")+
+  ylab("People")+ labs(caption = "*Not all categories existed for duration of the graph.")+
+  theme_minimal()
+
+print(department_size_frame)
+
+```
+
+##Category Density Graph
+This shows the percentage of time each category spends at a certain size. Probably not terribly useful, but its a cool graph.
+
+```{r density graph, echo=FALSE}
+#####Department Size Density Graph
+ggplot(data=filter(department_size_frame_long, Category != 'Total'), aes(Department_Size)) +
+  geom_density(aes(fill=factor(Category)), alpha=0.5) + 
+  ggtitle("CMSE Category Density Chart")+
+  xlab("People")+
+  ylab("Density")+ 
+  labs(fill="Category", subtitle="Maybe this will show something interesting one day. Who knows?")
+```
+
+##Scissor Graph of Single/Dual CMSE PhDs Over Time
+NOTES:
+
+ - The size and transparency of the dots represent the total number of CMSE PhDs at the time. Lighter/smaller means fewer PhDs.
+ - Some of the dual PhDs also appeared in the single PhD column. For this purpose, they were removed from the single PhD column and only counted in the dual PhD column. 
+ 
+```{r scissor graph, echo =FALSE}
+
+############################ Scissor Graph of Phd v. dual Phd ############################
+
+#calculate the percentage of dual/single PhDs and make the data "long" for use with ggplot
+department_size_frame_long <- transmute(department_size_frame, Filedates, "Size" = Single_PhD + Dual_PhD,
+                                    "Single_PhDs" = Single_PhD / (Single_PhD + Dual_PhD) * 100, 
+                                    "Dual_PhDs" = 100 - Single_PhDs) %>% 
+  gather(Category, Department_Size, c(Dual_PhDs, Single_PhDs), factor_key=TRUE)
+
+# Basic line graph with points
+ggplot(data=department_size_frame_long, aes(x=Filedates, y=Department_Size, group=Category,
+                                            color = Category)) +
+  geom_point(aes(alpha = Size, size = Size))+
+  geom_line()+
+  ggtitle("Dual v. Single PhDs Scissor Graph")+
+  xlab("Time")+
+  ylab("% Percentage %")+ labs(caption = "*Size and transparency refers to total PhD category size.")
+
+#print without the nasty names
+print(transmute(department_size_frame_long, 'Filedates' = Filedates, 'Category' =Category, 'Number_PhDs' = Size, 'Percentage' = Department_Size))
+
+```
+##Chord Diagram Showing Category Movement Through Time
+These graphs show the people who move from the different CMSE departments every year. The diagrams can be compared to one another. The size of the stripes represents the same number of people in each diagram. (If the CMSE department becomes very large eventually, this could become inconvenient.)
+
+NOTES:
+
+- The first email file from every year was used to genereate the date. 
+- The number of moves is shown, not the number of people. If a person jumps onto two new lists in the same year, they will be counted twice. 
+- The diagrams only show movement between categories, not movement into categories. (Completely new people won't show up.)
+- The staff column shows up as moving around frequently in these graphs. I assume this is because the staff recieves emails so they know whats going on. A similar situation might be occuring with the faculty column.
+```{r chord diagram, echo=FALSE}
+######################################### Now for a chord diagram ###############################################
+
+#make a vector that will hold all of the first file names
+first_file_every_year <- c("space")
+
+#find the names of the first file in every year, and save the name
+#For every year of email record-keeping
+for(year in as.numeric(substr(filenames[1], 1,4)):as.numeric(substr(tail(filenames, n=1),1,4))){
+  
+  #look at all the files until the first one with a matching year is found
+  for(file in filenames){
+    if(year == as.numeric(substr(file, 1,4))){
+      
+      #if the file is the first with a matching year, save the file's name and move on to looking for the next year
+      first_file_every_year <- append(first_file_every_year, file)
+      print(file)
+      break
+    }
+  }
+}
+
+row_names <- c('cmse_staff','cmse_fac','cmse_phd','cmse_dual_phd','cmse_sci','cmse_grad_sci','cmse_ug_sci',
+               '[Redacted]','cmse_alumni (pending)','cmse_alumni')
+  
+grid.col <- c('Staff'= "#171738",'Faculty'="#8EF9F3",'Single PhD'="#593C8F",
+              'Dual PhD'="#FFD9CE",'Science'="#DB5461",'Graduate Science'="#ED7D3A",
+              'Undergraduate Science'="#2FBF71",'Announcements'="#363537",
+              'Pending Alumni'="#5CFF38",'Alumni'="#3F4142")
+
+#function to use later that switches the string 'cmse_---' to a cleaner string
+fancy_names <- function(old_name){
+  
+  #convenience: making the new vec the same length as the old one
+  new_name <- old_name
+  
+  #for every name in the vec
+  for (name_index in 1:length(old_name)) {
+    
+    #the corresponding spot in the new name vec should be the cleaner version of the old one
+    new_name[name_index] = switch (old_name[name_index],
+            'cmse_staff' = 'Staff',
+            'cmse_fac'= 'Faculty',
+            'cmse_phd'= 'Single PhD',
+            'cmse_dual_phd'= 'Dual PhD',
+            'cmse_sci'= 'Science',
+            'cmse_grad_sci'= 'Graduate Science', #maybe a different name?
+            'cmse_ug_sci'= 'Undergraduate Science',
+            'CMSE-ANNOUNCE@list.msu.edu (non-CMSE people)'= 'Announcements',
+            'cmse_alumni (pending)'= 'Alumni',
+            'cmse_alumni'= 'Pending Alumni'
+          )
+  }
+  
+  return(new_name)
+}
+
+#will hold all the data for every year, and will be subset by year later
+master_adjacency_df <- data.frame('From' = NA, 'To' = NA, 'Movement' = as.numeric(0),'Year' = NA, 
+                                  stringsAsFactors = FALSE)
+
+#this keeps track of every year's total movement size so I can scale all of the charts so they're comparable with one another
+adjacency_data_years_and_sizes <- data.frame("Year" = NA, "Total_Movement" = as.numeric(0), stringsAsFactors = FALSE)
+
+###create an adjacency data frame for graphing
+#for the first file of every year
+for(file_number in 2:(length(first_file_every_year)-1)){
+  
+  #create a df for each year. (it will be 100 rows long)
+  adjacency_df <- data.frame("From" = 1:100, 'To' = NA, 'Movement' = as.numeric(0), stringsAsFactors = FALSE)
+  
+  #convenience: to keep track of which row to write into
+  current_row <- 1
+  
+  #compare the movement from every cmse category to every cmse category
+  for (from_name in row_names) {
+    for (to_name in row_names) {
+      
+      adjacency_df$From[current_row] <- from_name
+      adjacency_df$To[current_row] <- to_name
+      
+      #the movement is the number of names that moved to a different column the next year
+      #that were not already in the other column the first year
+      adjacency_df$Movement[current_row] <-  count_if(function(x) 
+        return(!(x %in% filelist[first_file_every_year[file_number]][[1]][[to_name]])), #doesn't show the nonmovement?
+        intersect(filelist[first_file_every_year[file_number]][[1]][[from_name]], #doesn't exclude staff/fac who got added to lists?
+                  filelist[first_file_every_year[file_number + 1]][[1]][[to_name]])  
+        )
+        
+      #move to next row
+      current_row = current_row + 1
+    }
+  }
+  
+  #save the year name and total size movement for scaling later
+  adjacency_data_years_and_sizes <- rbind(adjacency_data_years_and_sizes, 
+    c( paste(substr(first_file_every_year[file_number], 1,4), "-", 
+            as.character(as.numeric( substr(first_file_every_year[file_number+1], 1,4))), " Movement", sep = ''),
+   sum(adjacency_df$Movement)))
+    
+  
+  #save all the movement from that year, with nicely formatted names, and save the year name as well
+  #omit paths with no movement
+    master_adjacency_df <- rbind(master_adjacency_df, filter(adjacency_df, Movement != 0) %>% mutate("From" = fancy_names(From), 
+                                                                                                     "To" = fancy_names(To),
+                                                        "Year" = 
+          paste(substr(first_file_every_year[file_number], 1,4), "-", 
+                as.character(as.numeric( substr(first_file_every_year[file_number+1], 1,4))), " Movement", sep = '')))
+}
+
+#select the name of the year with the largest movement. (Doesn't matter if there is a tie)
+largest_year <- filter(adjacency_data_years_and_sizes, Total_Movement ==  max(Total_Movement))
+
+
+
+#creates a df with a matching year, then it removed the year column
+filter_then_mutate <- function(master_frame, year){
+  filter(master_adjacency_df, Year == year) %>% transmute(From = From, To= To, Movement = Movement)
+}
+
+#print out every chord diagram
+for(row_num in c(2:(length(adjacency_data_years_and_sizes)+2))){
+  
+  #this is the scaling factor that will be used to add degrees of white space between slices
+  gap <- 360 - 360*(as.numeric(adjacency_data_years_and_sizes$Total_Movement[row_num])/(as.numeric(largest_year[1,2])))
+  
+  #find the categories that will be included as pie slices
+  included_categories <- unique(c(unique(filter_then_mutate(master_adjacency_df, adjacency_data_years_and_sizes$Year[row_num])$From),
+                           unique( filter_then_mutate(master_adjacency_df, adjacency_data_years_and_sizes$Year[row_num])$To)))
+#  circos.initialize()
+  
+  #set a large gap in the new pie so that all the charts are scaled against each other, all other gaps will be 0
+  circos.par(gap.after = c(gap,rep(0, (length(included_categories))-1)))
+  
+  #generate pie
+  chordDiagram(filter_then_mutate(master_adjacency_df, adjacency_data_years_and_sizes$Year[row_num]), grid.col = grid.col,
+               directional = 1, direction.type = c("diffHeight", "arrows"),
+               link.arr.type = "big.arrow", diffHeight = -uh(.01, "mm"))
+  
+  title(adjacency_data_years_and_sizes$Year[row_num])
+  
+  #empty previous settings
+  circos.clear()
+}
+
+print(master_adjacency_df)
+```
+##Bar Charts Showing the Domain Names on Emails in the 'Announcments' Category
+
+NOTES:
+
+- This grabs data from the columns titled *[Redacted]* in the first email file of every year ONLY. (Some of the excel files are titled cmse_announce instead, but this could be an easy fix.)
+- The color brewer command in the graph generation may need to be removed if there are a lot of categories.
+
+```{r domain names, echo=FALSE, eval=TRUE}
+#returns domain name or entire name if there is no '@'
+domain_name <- function(emails){
+  
+  #will get overwritten
+  domains <- emails
+  
+  for (index in 1:length(emails)) {
+    #record domain off each email
+    domains[index] <- as.character((str_split(emails[index], '@')[[1]])[length(str_split(emails[index], '@')[[1]])])
+  }
+  
+  return(domains)
+}
+  
+first_loop <- TRUE
+
+#for every year
+for (file in 1:length(first_file_every_year)) {
+  
+  #if the file has an announcement column
+  if(length(filelist[first_file_every_year[file]][[1]]$[redacted]) != 0){
+    
+    #make a df with the domain names of the announcement folks
+    email_domain_names <- read.csv(first_file_every_year[file], stringsAsFactors = FALSE)
+    
+    #extract domain names
+    email_domain_names <- transmute(email_domain_names,
+                                    'Announcement_Domain_Names' = domain_name([Redacted]))
+    
+    #modify data
+    email_domain_names <-  group_by(email_domain_names, Announcement_Domain_Names) %>% 
+                                    summarize(Count = n()) %>% #count number of each domain
+                                    arrange(desc(Count)) %>% 
+                                    filter(Announcement_Domain_Names != '')%>% #get rid of empty domains
+                                    mutate('Year' = as.numeric(substr(first_file_every_year[file], 1,4)),
+                                           'Order' = c(1:length(Count)))  #add year and popularity ranking   
+      
+    if(first_loop){
+      #make the master frame
+      master_domain_names <- email_domain_names
+        
+      first_loop <-  FALSE
+      
+    }else{
+      #append the master frame
+      master_domain_names <- rbind(master_domain_names, email_domain_names)
+    }
+      
+  }
+}
+
+#display bubble chart
+# bubbles(email_domain_names$Count, email_domain_names$Announcement_Domain_Names, 
+#        tooltip = email_domain_names$Count)
+
+#horizontal bar chart representing domain names
+ggplot(master_domain_names, aes(x= Year, y=Count, fill=Announcement_Domain_Names))+
+  geom_bar(width = .75, stat = "identity", color = 'black')+
+  ggtitle('Announcment Domain Names')+
+  coord_flip()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Set3")+ #this may cause problems eventually?? If there are too many distinct domains
+  scale_x_continuous(breaks=c(unique(master_domain_names$Year)))
+```
+
+##Chart showing the ranking of the most common email domain names over time
+
+NOTES:
+
+- Without very much data, this chart isn't very interesting.
+- At the moment, it detects spaces.
+
+```{r order graph, eval=TRUE, echo=FALSE}
+#A map showing the popularity of each domain name
+#A map showing the popularity of each domain name
+ggplot(data=master_domain_names, aes(x=Year, y=Order, group=Announcement_Domain_Names, color = Announcement_Domain_Names)) +
+  geom_point(size=10, alpha = .5)+
+  geom_line()+
+  ggtitle("Ranking of Domain Name Popularity Over Time")+
+  xlab("Year")+
+  ylab("Ranking")+ labs(caption = "*At the moment there isn't enough data to make this interesting.")+
+  scale_y_continuous(breaks=c((master_domain_names$Order[length(master_domain_names$Order)])):1)+ #this may eventually cause some omitted numbers but I doubt it
+  scale_x_continuous(breaks=c(unique(master_domain_names$Year)))+
+  theme_minimal()
+
+print(master_domain_names)
+```
+
+##Possible Improvements
+
+The Markdown doc could be improved by:
+
+ - Removing any spaces in the email domain names.
+ - Adding better colors.
+ - Getting the points on the last chart to graph with the y-axis reversed. (Why this doesn't happen automatically I don't understand.)
+
+##References
+The following libraries were used in this app:
+
+- tidyverse: For general functionality.
+- stringr: For substringing strings.
+- expss: For the count_if function.
+- tidyr: For the creation of tidy data.
+- ggplot2: For creating the line, density, and scissor graphs.
+- dplyr: For the transmute function.
+- circlize: For creating the chord diagrams.
+
+The following websites were very helpful:
+
+ - https://jokergoo.github.io/circlize_book/book/advanced-usage-of-chorddiagram.html: Instructions for the circlize package.
+ - http://r-statistics.co/Top50-Ggplot2-Visualizations-MasterList-R-Code.html: Instructions on how to make a density graph.
+ - https://coolors.co/ff6700-ebebeb-c0c0c0-3a6ea5-004e98: Awesome color palette maker.
+ - https://stackoverflow.com/questions/45176431/extract-name-of-data-frame-in-r-as-character: How to turn a dataframe name into a string.
+ - https://r4ds.had.co.nz/transform.html#grouped-summaries-with-summarise: functions of dplyr
+ - http://www.sthda.com/english/wiki/ggplot2-barplots-quick-start-guide-r-software-and-data-visualization: intro to ggplot2 bar charts
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
