@@ -267,7 +267,7 @@ fancy_names <- function(old_name){
             'cmse_sci'= 'Science',
             'cmse_grad_sci'= 'Graduate Science', #maybe a different name?
             'cmse_ug_sci'= 'Undergraduate Science',
-            'CMSE-ANNOUNCE@list.msu.edu (non-CMSE people)'= 'Announcements',
+            '[Redacted]'= 'Announcements',
             'cmse_alumni (pending)'= 'Alumni',
             'cmse_alumni'= 'Pending Alumni'
           )
